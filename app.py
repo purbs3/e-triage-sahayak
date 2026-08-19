@@ -17,14 +17,6 @@ st.set_page_config(
         'About': "National Health Mission - e-Triage System v3.0"
     }
 )
-st.markdown('''
-<link rel="manifest" href="manifest.json">
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js');
-}
-</script>
-''', unsafe_allow_html=True)
 
 # ---------- SESSION STATE INIT ----------
 if 'logged_in' not in st.session_state:
@@ -34,7 +26,7 @@ if 'splash_done' not in st.session_state:
 if 'dark_mode' not in st.session_state:
     st.session_state.dark_mode = False
 if 'lang' not in st.session_state:
-    st.session_state.lang = 'en'  # 'en' or 'hi'
+    st.session_state.lang = 'en'
 if 'history' not in st.session_state:
     st.session_state.history = []
 if 'sync_time' not in st.session_state:
@@ -85,7 +77,7 @@ TEXTS = {
 def t(key):
     return TEXTS[key][st.session_state.lang]
 
-# ---------- CUSTOM CSS WITH DARK MODE & ANIMATIONS ----------
+# ---------- CUSTOM CSS (with dark mode, animations, responsiveness) ----------
 def get_css():
     bg = "#0B2B4A" if st.session_state.dark_mode else "#F4F7FB"
     card_bg = "#1E2A3A" if st.session_state.dark_mode else "#FFFFFF"
@@ -211,7 +203,6 @@ def get_css():
             .result-text h2 {{ font-size: 1.2rem; }}
             .software-footer {{ flex-direction: column; align-items: center; text-align: center; }}
             .stButton>button {{ width: 100% !important; }}
-            /* Fix mobile gap */
             .input-label {{ gap: 15px; margin-top: 10px !important; }}
         }}
         @media screen and (max-width: 480px) {{
@@ -220,7 +211,7 @@ def get_css():
             .input-label {{ font-size: 0.8rem; }}
         }}
         
-        /* Button Hover Effect */
+        /* Button Hover */
         .stButton>button {{
             transition: all 0.3s ease !important;
             border-radius: 30px !important;
@@ -231,7 +222,6 @@ def get_css():
             box-shadow: 0 6px 20px rgba(0,0,0,0.2) !important;
         }}
         
-        /* Sync badge */
         .sync-badge {{
             background: #22C55E; color: white; padding: 4px 12px;
             border-radius: 20px; font-size: 0.7rem; font-weight: 600;
@@ -239,7 +229,6 @@ def get_css():
         }}
     </style>
     """
-    # Note: The nested {''' ... '''} for dark mode CSS is safe because it's inside an f-string.
 
 # ---------- SVG ICONS ----------
 ASHOKA_CHAKRA = '''
@@ -261,7 +250,7 @@ def icon_alert_red(): return '<svg width="48" height="48" viewBox="0 0 24 24" fi
 def icon_alert_yellow(): return '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2"><path d="M12 2 L2 20 L22 20 L12 2z"/><path d="M12 9v4M12 17h.01"/></svg>'
 def icon_alert_green(): return '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></svg>'
 
-# ---------- SPLASH SCREEN ----------
+# ---------- SPLASH SCREEN (only once) ----------
 if not st.session_state.splash_done:
     splash_html = f'''
     <div class="splash-container">
@@ -274,14 +263,14 @@ if not st.session_state.splash_done:
     </div>
     '''
     st.markdown(splash_html, unsafe_allow_html=True)
-    time.sleep(1.5)  # Simulate loading
+    time.sleep(1.5)
     st.session_state.splash_done = True
     st.rerun()
 
 # ---------- APPLY CSS ----------
 st.markdown(get_css(), unsafe_allow_html=True)
 
-# ---------- TRICOLOR ----------
+# ---------- TRICOLOR STRIP ----------
 st.markdown('''
 <div class="tricolor-strip">
     <div class="tricolor-saffron"></div>
@@ -290,8 +279,9 @@ st.markdown('''
 </div>
 ''', unsafe_allow_html=True)
 
-# ---------- LOGIN CHECK ----------
+# ---------- LOGIN OR MAIN UI ----------
 if not st.session_state.logged_in:
+    # ---------- LOGIN SCREEN ----------
     st.markdown(f'<h1 style="text-align: center; color: #0B2B4A; margin-top: 40px;">{t("login_title")}</h1>', unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -310,8 +300,9 @@ if not st.session_state.logged_in:
                     st.error(t('invalid'))
             st.markdown('</div>', unsafe_allow_html=True)
             st.caption("Demo: `admin/admin` or `asha/asha`")
-    st.stop()
+    st.stop()   # यहाँ stop जरूरी है ताकि login screen के बाद नीचे का code न चले
 
+# ---------- MAIN APP (only when logged in) ----------
 # ---------- SIDEBAR ----------
 with st.sidebar:
     st.markdown(f'''
@@ -339,5 +330,3 @@ with st.sidebar:
         if st.button("🇬🇧 EN" if st.session_state.lang == 'hi' else "🇮🇳 हिंदी", use_container_width=True):
             st.session_state.lang = 'hi' if st.session_state.lang == 'en' else 'en'
             st.rerun()
-
-    
