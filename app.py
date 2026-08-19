@@ -17,6 +17,14 @@ st.set_page_config(
         'About': "National Health Mission - e-Triage System v3.0"
     }
 )
+st.markdown('''
+<link rel="manifest" href="manifest.json">
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
+</script>
+''', unsafe_allow_html=True)
 
 # ---------- SESSION STATE INIT ----------
 if 'logged_in' not in st.session_state:
