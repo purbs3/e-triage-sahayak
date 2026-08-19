@@ -37,65 +37,71 @@ if 'role' not in st.session_state:
 if 'last_assessment' not in st.session_state:
     st.session_state.last_assessment = None
 
-# ---------- DATABASE SETUP ----------
+# ---------- DATABASE SETUP & AUTO-MIGRATION ----------
 DB_NAME = "triage_data.db"
 
+def get_db_connection():
+    return sqlite3.connect(DB_NAME, check_same_thread=False)
+
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS assessments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            age INTEGER,
-            fever TEXT,
-            breath TEXT,
-            bp TEXT,
-            pregnant TEXT,
-            diabetes TEXT,
-            chest_pain TEXT,
-            vomiting TEXT,
-            headache TEXT,
-            spo2 INTEGER,
-            district TEXT,
-            block TEXT,
-            result_title TEXT,
-            result_msg TEXT,
-            level TEXT,
-            timestamp TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS assessments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                age INTEGER,
+                fever TEXT,
+                breath TEXT,
+                bp TEXT,
+                pregnant TEXT,
+                diabetes TEXT,
+                chest_pain TEXT,
+                vomiting TEXT,
+                headache TEXT,
+                spo2 INTEGER,
+                district TEXT,
+                block TEXT,
+                result_title TEXT,
+                result_msg TEXT,
+                level TEXT,
+                timestamp TEXT,
+                abha_id TEXT DEFAULT ''
+            )
+        ''')
+        # Check if abha_id column exists for existing DBs
+        c.execute("PRAGMA table_info(assessments)")
+        columns = [col[1] for col in c.fetchall()]
+        if 'abha_id' not in columns:
+            c.execute("ALTER TABLE assessments ADD COLUMN abha_id TEXT DEFAULT ''")
+        conn.commit()
 
 def save_to_db(data):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO assessments (
-            name, age, fever, breath, bp, pregnant, diabetes,
-            chest_pain, vomiting, headache, spo2, district, block,
-            result_title, result_msg, level, timestamp
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        data['name'], data['age'], data['fever'], data['breath'],
-        data['bp'], data['pregnant'], data['diabetes'],
-        data['chest_pain'], data['vomiting'], data['headache'],
-        data['spo2'], data['district'], data['block'],
-        data['result_title'], data['result_msg'], data['level'],
-        data['timestamp']
-    ))
-    last_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return last_id
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO assessments (
+                name, age, fever, breath, bp, pregnant, diabetes,
+                chest_pain, vomiting, headache, spo2, district, block,
+                result_title, result_msg, level, timestamp, abha_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            data['name'], data['age'], data['fever'], data['breath'],
+            data['bp'], data['pregnant'], data['diabetes'],
+            data['chest_pain'], data['vomiting'], data['headache'],
+            data['spo2'], data['district'], data['block'],
+            data['result_title'], data['result_msg'], data['level'],
+            data['timestamp'], data.get('abha_id', '')
+        ))
+        last_id = c.lastrowid
+        conn.commit()
+        return last_id
 
 @st.cache_data(ttl=10)
 def load_from_db():
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT * FROM assessments ORDER BY id DESC", conn)
-    conn.close()
-    return df
+    with get_db_connection() as conn:
+        df = pd.read_sql_query("SELECT * FROM assessments ORDER BY id DESC", conn)
+        return df
 
 init_db()
 
@@ -108,6 +114,8 @@ SVG_HEADING_ANALYTICS = """<svg width="22" height="22" viewBox="0 0 24 24" fill=
 
 SVG_HEADING_LOGS = """<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0B2B4A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>"""
 
+SVG_HEADING_OUTBREAK = """<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 6px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>"""
+
 SVG_ALERT_RED = """<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 8px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>"""
 
 SVG_ALERT_YELLOW = """<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 8px;"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>"""
@@ -119,11 +127,6 @@ TEXTS = {
     'app_title': {'en': 'e-Triage Sahayak', 'hi': 'ई-ट्राइएज सहायक'},
     'subtitle': {'en': 'National Health Mission - AI-Assisted Referral Decision System', 'hi': 'राष्ट्रीय स्वास्थ्य मिशन - एआई सहायक रेफरल निर्णय प्रणाली'},
     'secure_badge': {'en': 'SECURE - PRODUCTION', 'hi': 'सुरक्षित - उत्पादन'},
-    'ministry': {'en': 'MINISTRY OF HEALTH', 'hi': 'स्वास्थ्य मंत्रालय'},
-    'govt': {'en': 'Govt. of India', 'hi': 'भारत सरकार'},
-    'scheme': {'en': 'Ayushman Bharat', 'hi': 'आयुष्मान भारत'},
-    'mission': {'en': 'DIGITAL HEALTH MISSION', 'hi': 'डिजिटल स्वास्थ्य मिशन'},
-    'asha': {'en': 'ASHA Worker Module', 'hi': 'आशा वर्कर मॉड्यूल'},
     'form_title': {'en': 'Patient Clinical Assessment', 'hi': 'रोगी नैदानिक मूल्यांकन'},
     'name': {'en': 'Patient Full Name', 'hi': 'रोगी का पूरा नाम'},
     'age': {'en': 'Age (in years)', 'hi': 'आयु (वर्षों में)'},
@@ -136,6 +139,7 @@ TEXTS = {
     'spo2': {'en': 'Oxygen Level (SpO2 %)', 'hi': 'ऑक्सीजन स्तर (SpO2 %)'},
     'district': {'en': 'District', 'hi': 'जिला'},
     'block': {'en': 'Block / Taluka', 'hi': 'ब्लॉक / तालुका'},
+    'abha': {'en': 'ABHA Health ID (Optional)', 'hi': 'आभा हेल्थ आईडी (वैकल्पिक)'},
     'submit': {'en': 'Generate Referral Recommendation', 'hi': 'रेफरल अनुशंसना उत्पन्न करें'},
 }
 
@@ -175,6 +179,20 @@ def calculate_triage(vitals):
             'action': 'ACTION: ROUTINE (OPD Timing)'
         }
 
+# ---------- OUTBREAK SURVEILLANCE ENGINE ----------
+def check_outbreak_risk(df):
+    if df.empty or len(df) < 3:
+        return []
+    
+    # Analyze high fever or respiratory illness clustering in blocks
+    fever_cases = df[df['fever'] == 'High (>102°F)']
+    if fever_cases.empty:
+        return []
+    
+    cluster_counts = fever_cases.groupby(['district', 'block']).size().reset_index(name='case_count')
+    hotspots = cluster_counts[cluster_counts['case_count'] >= 2].to_dict('records')
+    return hotspots
+
 # ---------- PDF GENERATOR (OFFICIAL REFERRAL SLIP) ----------
 def generate_referral_pdf(data):
     if not PDF_AVAILABLE:
@@ -196,7 +214,10 @@ def generate_referral_pdf(data):
     # Patient Demographics
     pdf.set_text_color(11, 43, 74)
     pdf.set_font("Helvetica", "B", 11)
-    pdf.cell(190, 7, f"Ref ID: NHM-{data.get('id', 'NEW')} | Date: {data.get('timestamp')}", ln=True)
+    ref_str = f"Ref ID: NHM-{data.get('id', 'NEW')}"
+    if data.get('abha_id'):
+        ref_str += f" | ABHA ID: {data['abha_id']}"
+    pdf.cell(190, 7, f"{ref_str} | Date: {data.get('timestamp')}", ln=True)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(4)
     
@@ -250,7 +271,7 @@ def generate_referral_pdf(data):
     pdf.multi_cell(185, 5, f"Clinical Action: {data['result_msg']}")
     pdf.ln(8)
     
-    # Digital Verification Stamp & QR Note
+    # Verification Stamp
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 116, 139)
     pdf.cell(190, 5, "Official Ayushman Bharat Digital Health Mission document. Valid for expedited clinical intake.", ln=True, align='C')
@@ -281,11 +302,11 @@ st.markdown(f"""
 with st.sidebar:
     st.markdown("### System Settings")
     st.session_state.lang = st.selectbox("Language / भाषा", ['en', 'hi'], format_func=lambda x: 'English' if x == 'en' else 'हिंदी')
-    menu = st.radio("Navigation", ["New Assessment", "Analytics Dashboard", "Patient Logs"])
+    menu = st.radio("Navigation", ["New Assessment", "Outbreak Surveillance", "Analytics Dashboard", "Patient Logs"])
     st.markdown("---")
-    st.caption("National Digital Health Mission (NDHM) &bull; Production v3.0")
+    st.caption("National Digital Health Mission (NDHM) &bull; Production v3.2")
 
-# ---------- PAGE: NEW ASSESSMENT ----------
+# ---------- PAGE 1: NEW ASSESSMENT ----------
 if menu == "New Assessment":
     st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_ASSESSMENT}<h3 style='margin:0; font-size: 1.3rem; color: #0B2B4A;'>{t('form_title')}</h3></div>", unsafe_allow_html=True)
     with st.form("triage_form"):
@@ -305,6 +326,7 @@ if menu == "New Assessment":
         with col3:
             district = st.text_input(t('district'), value="Varanasi")
             block = st.text_input(t('block'), value="Kashi")
+            abha_id = st.text_input(t('abha'), placeholder="e.g. 91-XXXX-XXXX-XXXX")
             diabetes = st.selectbox(t('diabetes'), ["No", "Yes"])
             headache = st.selectbox("Severe Headache", ["No", "Yes"])
             vomiting = st.selectbox("Vomiting / Nausea", ["No", "Yes"])
@@ -330,16 +352,18 @@ if menu == "New Assessment":
                 'bp': bp, 'pregnant': pregnant, 'diabetes': diabetes,
                 'chest_pain': chest_pain, 'vomiting': vomiting, 'headache': headache,
                 'spo2': spo2, 'district': district, 'block': block,
+                'abha_id': abha_id,
                 'result_title': res['title'], 'result_msg': res['msg'],
-                'level': res['level'], 'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                'level': res['level'], 'action': res['action'],
+                'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             
-            # Save to Database and store in Session
             row_id = save_to_db(assessment_payload)
             assessment_payload['id'] = row_id
             st.session_state.last_assessment = assessment_payload
+            st.cache_data.clear()
 
-    # Render Result if present
+    # Render Result Card
     if st.session_state.last_assessment:
         cur = st.session_state.last_assessment
         color = "#DC2626" if cur['level'] == 'RED' else ("#F59E0B" if cur['level'] == 'YELLOW' else "#22C55E")
@@ -358,95 +382,27 @@ if menu == "New Assessment":
         </div>
         """, unsafe_allow_html=True)
         
-        # --- ACTION PANEL: DIGITAL REFERRAL SLIP & SOS ---
+        # Action Hub
         st.markdown("#### Clinical Action Hub")
         col_act1, col_act2, col_act3 = st.columns([1.5, 1.5, 1])
         
-        # 1. Download Verified PDF Slip
+        # 1. Official PDF Slip
         with col_act1:
             if PDF_AVAILABLE:
                 pdf_path = generate_referral_pdf(cur)
                 if pdf_path and os.path.exists(pdf_path):
                     with open(pdf_path, "rb") as f:
                         st.download_button(
-                            label="📄 Download Official Referral Slip (.PDF)",
+                            label="Download Official Referral Slip (.PDF)",
                             data=f,
                             file_name=f"NHM_Referral_{cur['name']}_{cur.get('id', 'Rec')}.pdf",
                             mime="application/pdf",
                             use_container_width=True
                         )
             else:
-                st.caption("PDF export engine unavailable.")
+                st.caption("PDF engine unavailable.")
                 
-        # 2. Instant SOS / Ambulance Trigger
+        # 2. Telemedicine / Emergency Connect
         with col_act2:
-            if cur['level'] == 'RED':
-                if st.button("🚨 Dispatch 108 Emergency Alert", use_container_width=True):
-                    with st.status("Connecting to District Emergency Medical Response..."):
-                        time.sleep(1)
-                        st.write("📍 Telemetry sent to District Control Room.")
-                        time.sleep(0.5)
-                        st.write("🚑 Nearest 108 Ambulance Unit notified.")
-                    st.success("Emergency Response Dispatched successfully.")
-            else:
-                if st.button("💬 Send Summary to Doctor", use_container_width=True):
-                    st.success("Triage summary dispatched to PHC Medical Officer.")
-                    
-        # 3. Live QR Code for Hospital OPD Quick-Check
-        with col_act3:
-            qr_data = f"NHM-ID:{cur.get('id')}|Patient:{cur['name']}|SpO2:{cur['spo2']}|Level:{cur['level']}"
-            encoded_qr = urllib.parse.quote(qr_data)
-            qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=110x110&data={encoded_qr}"
-            st.image(qr_url, caption="OPD Verification QR", width=110)
-
-# ---------- PAGE: ANALYTICS DASHBOARD ----------
-elif menu == "Analytics Dashboard":
-    st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_ANALYTICS}<h3 style='margin:0; font-size: 1.3rem; color: #0B2B4A;'>District Triage Analytics</h3></div>", unsafe_allow_html=True)
-    df = load_from_db()
-    if df.empty:
-        st.info("No assessment records found.")
-    else:
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Assessments", len(df))
-        col2.metric("Critical (Red Alert)", len(df[df['level'] == 'RED']))
-        col3.metric("Urgent (Yellow Alert)", len(df[df['level'] == 'YELLOW']))
-
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            fig1 = px.pie(
-                df, 
-                names='level', 
-                title='Triage Severity Distribution', 
-                color='level',
-                color_discrete_map={'RED': '#DC2626', 'YELLOW': '#F59E0B', 'GREEN': '#22C55E'}
-            )
-            fig1.update_layout(margin=dict(t=40, b=20, l=20, r=20))
-            st.plotly_chart(fig1, use_container_width=True)
-            
-        with col_c2:
-            fig2 = px.histogram(
-                df, 
-                x='age', 
-                nbins=15, 
-                title='Patient Age Distribution', 
-                color_discrete_sequence=['#0B2B4A']
-            )
-            fig2.update_layout(margin=dict(t=40, b=20, l=20, r=20), xaxis_title="Age (Years)", yaxis_title="Count")
-            st.plotly_chart(fig2, use_container_width=True)
-
-# ---------- PAGE: PATIENT LOGS ----------
-elif menu == "Patient Logs":
-    st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_LOGS}<h3 style='margin:0; font-size: 1.3rem; color: #0B2B4A;'>Patient Assessment Registry</h3></div>", unsafe_allow_html=True)
-    df = load_from_db()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Export Registry Data (CSV)", 
-            data=csv, 
-            file_name="triage_registry.csv", 
-            mime="text/csv",
-            use_container_width=False
-        )
-    else:
-        st.info("No records recorded yet.")
+            if cur['level'] in ['RED', 'YELLOW']:
+                tele_u
