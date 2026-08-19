@@ -8,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------- CUSTOM CSS (separate markdown block) ----------
+# ---------- CUSTOM CSS ----------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
@@ -215,7 +215,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- TRICOLOR STRIP (separate block) ----------
+# ---------- TRICOLOR STRIP ----------
 st.markdown("""
 <div class="tricolor-strip">
     <div class="tricolor-saffron"></div>
@@ -224,7 +224,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------- SIDEBAR WITH ASHOKA CHAKRA SVG ----------
+# ---------- SIDEBAR ----------
 with st.sidebar:
     st.markdown("""
     <div class="sidebar-content">
@@ -251,7 +251,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-# ---------- SVG ICON FUNCTIONS (No emojis) ----------
+# ---------- SVG ICON FUNCTIONS ----------
 def icon_fever():
     return '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0B2B4A" stroke-width="2"><path d="M12 2v4M12 22v-4M4 12H2M6 12H4M20 12H18M22 12H20M19.07 4.93l-2.83 2.83M4.93 19.07l2.83-2.83M19.07 19.07l-2.83-2.83M4.93 4.93l2.83 2.83"/><circle cx="12" cy="12" r="3"/><path d="M14 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>'
 
@@ -286,6 +286,118 @@ st.markdown("""
         <div>
             <div class="title">e-Triage Sahayak</div>
             <div class="subtitle">National Health Mission · AI-Assisted Referral Decision System</div>
+        </div>
+    </div>
+    <div class="header-right">
+        <span class="badge">SECURE · PRODUCTION</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ---------- FORM CARD ----------
+with st.container():
+    st.markdown("""
+    <div class="form-card">
+        <h3>Patient Clinical Assessment</h3>
+        <div class="desc">Enter the primary vitals and symptoms. The system will generate an evidence-based triage recommendation as per MoHFW guidelines.</div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f'<div class="input-label">{icon_user()} Age (in years)</div>', unsafe_allow_html=True)
+        age = st.number_input("", min_value=0, max_value=120, step=1, value=35, label_visibility="collapsed", key="age_input")
+        
+        st.markdown(f'<div class="input-label" style="margin-top:20px;">{icon_fever()} Fever / High Temperature</div>', unsafe_allow_html=True)
+        fever = st.selectbox("", options=["No", "Yes"], label_visibility="collapsed", key="fever_select")
+        
+        st.markdown(f'<div class="input-label" style="margin-top:20px;">{icon_lungs()} Breathing Difficulty</div>', unsafe_allow_html=True)
+        breath_issue = st.selectbox("", options=["No", "Yes"], label_visibility="collapsed", key="breath_select")
+
+    with col2:
+        st.markdown(f'<div class="input-label">{icon_heart()} Blood Pressure (BP) Status</div>', unsafe_allow_html=True)
+        bp_status = st.selectbox("", options=["Normal", "High", "Low"], label_visibility="collapsed", key="bp_select")
+        
+        st.markdown(f'<div class="input-label" style="margin-top:20px;">{icon_pregnant()} Patient is Pregnant?</div>', unsafe_allow_html=True)
+        is_pregnant = st.selectbox("", options=["No", "Yes"], label_visibility="collapsed", key="pregnant_select")
+        
+        st.markdown(f'<div class="input-label" style="margin-top:20px;">{icon_diabetes()} History of Diabetes?</div>', unsafe_allow_html=True)
+        diabetes = st.selectbox("", options=["No", "Yes"], label_visibility="collapsed", key="diabetes_select")
+    
+    st.markdown("---")
+    
+    # ---------- TRIAGE LOGIC ----------
+    def get_triage_decision(age, fever, breath_issue, bp_status, is_pregnant, diabetes):
+        if is_pregnant == "Yes" and bp_status == "High":
+            return ("RED", "Immediate referral to District Hospital / Medical College. Risk of Pre-eclampsia/Eclampsia. Call 108 Ambulance immediately.", "red")
+        if age > 60 and bp_status == "Low":
+            return ("RED", "Elderly patient with Low BP. High risk of Septic Shock. Urgent ICU admission required at Medical College.", "red")
+        if fever == "Yes" and breath_issue == "Yes" and age > 50:
+            return ("RED", "Severe Pneumonia/COVID-19 suspect with breathing issues in elderly. Immediate oxygen support needed. Refer to Tertiary Care Hospital.", "red")
+        if diabetes == "Yes" and fever == "Yes":
+            return ("YELLOW", "Diabetic patient with fever. High risk of infections. Refer to Community Health Centre (CHC) for advanced investigation.", "yellow")
+        if fever == "Yes" and breath_issue == "Yes":
+            return ("YELLOW", "Patient has fever with breathing issues. Needs Chest X-Ray and Oxygen saturation check. Refer to CHC.", "yellow")
+        if age < 5 and fever == "Yes":
+            return ("YELLOW", "Child under 5 with fever. Needs pediatric assessment. Refer to CHC immediately.", "yellow")
+        if fever == "Yes" and breath_issue == "No":
+            return ("GREEN", "Mild fever without breathing issues. Can be treated at PHC with basic medications (Paracetamol). Advise rest and hydration.", "green")
+        if bp_status == "Normal" and fever == "No":
+            return ("GREEN", "Vitals are stable. Routine checkup at PHC is sufficient. No emergency referral required.", "green")
+        return ("GREEN", "Patient seems stable. Continue monitoring at PHC. No immediate referral needed.", "green")
+
+    # ---------- SUBMIT BUTTON ----------
+    if st.button("Generate Referral Recommendation", use_container_width=False, type="primary", key="submit_btn"):
+        triage_title, triage_msg, triage_level = get_triage_decision(age, fever, breath_issue, bp_status, is_pregnant, diabetes)
+        
+        if triage_level == "red":
+            st.markdown(f"""
+            <div class="result-container result-red">
+                <div class="result-icon">{icon_alert_red()}</div>
+                <div class="result-text">
+                    <h2>RED ALERT · Critical</h2>
+                    <p>{triage_msg}</p>
+                    <span class="action-tag">ACTION: IMMEDIATE (0-15 Mins)</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif triage_level == "yellow":
+            st.markdown(f"""
+            <div class="result-container result-yellow">
+                <div class="result-icon">{icon_alert_yellow()}</div>
+                <div class="result-text">
+                    <h2>YELLOW ALERT · Moderate</h2>
+                    <p>{triage_msg}</p>
+                    <span class="action-tag">ACTION: URGENT (Within 1 Hour)</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="result-container result-green">
+                <div class="result-icon">{icon_alert_green()}</div>
+                <div class="result-text">
+                    <h2>GREEN ALERT · Stable</h2>
+                    <p>{triage_msg}</p>
+                    <span class="action-tag">ACTION: ROUTINE (OPD Timing)</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)  # close form-card
+
+# ---------- FOOTER ----------
+st.markdown("""
+<div class="software-footer">
+    <div>
+        <strong>National Digital Health Mission (NDHM)</strong> · Compliance: MoHFW Guidelines v.2.4
+    </div>
+    <div>
+        <span class="ver">End-to-End Encrypted</span>
+        <span class="ver" style="margin-left:10px;">v2.0.1</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)ission · AI-Assisted Referral Decision System</div>
         </div>
     </div>
     <div class="header-right">
