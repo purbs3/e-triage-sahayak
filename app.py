@@ -1,9 +1,12 @@
 import streamlit as st
 import datetime
 import time
-import base64
+import sqlite3
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from fpdf import FPDF
-import io
+import os
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
@@ -31,8 +34,67 @@ if 'history' not in st.session_state:
     st.session_state.history = []
 if 'sync_time' not in st.session_state:
     st.session_state.sync_time = None
-if 'patient_name' not in st.session_state:
-    st.session_state.patient_name = ""
+if 'role' not in st.session_state:
+    st.session_state.role = None
+if 'show_dashboard' not in st.session_state:
+    st.session_state.show_dashboard = False
+
+# ---------- DATABASE SETUP ----------
+DB_NAME = "triage_data.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS assessments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            age INTEGER,
+            fever TEXT,
+            breath TEXT,
+            bp TEXT,
+            pregnant TEXT,
+            diabetes TEXT,
+            chest_pain TEXT,
+            vomiting TEXT,
+            headache TEXT,
+            spo2 INTEGER,
+            district TEXT,
+            block TEXT,
+            result_title TEXT,
+            result_msg TEXT,
+            level TEXT,
+            timestamp TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def save_to_db(data):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO assessments (
+            name, age, fever, breath, bp, pregnant, diabetes,
+            chest_pain, vomiting, headache, spo2, district, block,
+            result_title, result_msg, level, timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        data['name'], data['age'], data['fever'], data['breath'],
+        data['bp'], data['pregnant'], data['diabetes'],
+        data['chest_pain'], data['vomiting'], data['headache'],
+        data['spo2'], data['district'], data['block'],
+        data['result_title'], data['result_msg'], data['level'],
+        data['timestamp']
+    ))
+    conn.commit()
+    conn.close()
+
+def load_from_db():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM assessments ORDER BY id DESC", conn)
+    conn.close()
+    return df
 
 # ---------- LANGUAGE DICTIONARY ----------
 TEXTS = {
@@ -53,7 +115,13 @@ TEXTS = {
     'bp': {'en': 'Blood Pressure (BP) Status', 'hi': 'रक्तचाप (बीपी) स्थिति'},
     'pregnant': {'en': 'Patient is Pregnant?', 'hi': 'क्या रोगी गर्भवती है?'},
     'diabetes': {'en': 'History of Diabetes?', 'hi': 'मधुमेह का इतिहास?'},
-    'submit': {'en': 'Generate Referral Recommendation', 'hi': 'रेफरल अनुशंसा उत्पन्न करें'},
+    'chest_pain': {'en': 'Chest Pain / Discomfort', 'hi': 'सीने में दर्द / बेचैनी'},
+    'vomiting': {'en': 'Vomiting / Nausea', 'hi': 'उल्टी / मतली'},
+    'headache': {'en': 'Severe Headache', 'hi': 'तीव्र सिरदर्द'},
+    'spo2': {'en': 'Oxygen Level (SpO2 %)', 'hi': 'ऑक्सीजन स्तर (SpO2 %)'},
+    'district': {'en': 'District', 'hi': 'जिला'},
+    'block': {'en': 'Block / Taluka', 'hi': 'ब्लॉक / तालुका'},
+    'submit': {'en': 'Generate Referral Recommendation', 'hi': 'रेफरल अनुशंसना उत्पन्न करें'},
     'history_title': {'en': 'Previous Assessments', 'hi': 'पिछले मूल्यांकन'},
     'no_history': {'en': 'No assessments recorded yet.', 'hi': 'अभी तक कोई मूल्यांकन रिकॉर्ड नहीं किया गया है।'},
     'sync_btn': {'en': 'Sync with Health Department', 'hi': 'स्वास्थ्य विभाग से सिंक करें'},
@@ -72,12 +140,14 @@ TEXTS = {
     'action_urgent': {'en': 'ACTION: URGENT (Within 1 Hour)', 'hi': 'कार्रवाई: अत्यावश्यक (1 घंटे के भीतर)'},
     'action_routine': {'en': 'ACTION: ROUTINE (OPD Timing)', 'hi': 'कार्रवाई: नियमित (ओपीडी समय)'},
     'footer': {'en': 'National Digital Health Mission (NDHM) - Compliance: MoHFW Guidelines v.2.4', 'hi': 'राष्ट्रीय डिजिटल स्वास्थ्य मिशन (NDHM) - अनुपालन: MoHFW दिशानिर्देश v.2.4'},
+    'alert_sent': {'en': 'Alert sent to CMO & District Hospital! (Dummy)', 'hi': 'CMO और जिला अस्पताल को अलर्ट भेजा गया! (डमी)'},
+    'send_alert': {'en': 'Send Alert to Doctor', 'hi': 'डॉक्टर को अलर्ट भेजें'},
 }
 
 def t(key):
     return TEXTS[key][st.session_state.lang]
 
-# ---------- CUSTOM CSS (with dark mode, animations, responsiveness) ----------
+# ---------- CSS (Dark mode + Print + Animations) ----------
 def get_css():
     bg = "#0B2B4A" if st.session_state.dark_mode else "#F4F7FB"
     card_bg = "#1E2A3A" if st.session_state.dark_mode else "#FFFFFF"
@@ -170,7 +240,7 @@ def get_css():
         .result-green .action-tag {{ background: #22C55E; color: white; }}
         .result-green h2 {{ color: #166534; }}
         
-        /* Dark mode overrides for results */
+        /* Dark mode overrides */
         {'''
         .result-red {{ background: #2A1515; border-color: #DC2626; }}
         .result-red h2 {{ color: #F87171; }}
@@ -227,6 +297,25 @@ def get_css():
             border-radius: 20px; font-size: 0.7rem; font-weight: 600;
             display: inline-block;
         }}
+        
+        /* ---------- PRINT CSS ---------- */
+        @media print {{
+            section[data-testid="stSidebar"] {{ display: none !important; }}
+            .main-header {{ display: none !important; }}
+            .stButton {{ display: none !important; }}
+            .tricolor-strip {{ display: none !important; }}
+            .software-footer {{ display: none !important; }}
+            .form-card {{
+                box-shadow: none !important;
+                border: 1px solid #000 !important;
+                padding: 1rem !important;
+            }}
+            .result-container {{
+                break-inside: avoid;
+                border: 2px solid #000 !important;
+            }}
+            .stApp {{ background: white !important; }}
+        }}
     </style>
     """
 
@@ -250,83 +339,12 @@ def icon_alert_red(): return '<svg width="48" height="48" viewBox="0 0 24 24" fi
 def icon_alert_yellow(): return '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" stroke-width="2"><path d="M12 2 L2 20 L22 20 L12 2z"/><path d="M12 9v4M12 17h.01"/></svg>'
 def icon_alert_green(): return '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9 12l2 2 4-4"/></svg>'
 
-# ---------- SPLASH SCREEN (only once) ----------
+# ---------- INIT DATABASE ----------
+init_db()
+
+# ---------- SPLASH SCREEN ----------
 if not st.session_state.splash_done:
     splash_html = f'''
     <div class="splash-container">
         <div class="splash-logo">⚕️</div>
-        <h1 style="color: #FF9933; font-weight: 700;">{t('ministry')}</h1>
-        <p style="color: #7AA9D9; font-size: 1.2rem;">{t('govt')}</p>
-        <p style="color: white; font-weight: 300; margin-top: 10px;">{t('scheme')}</p>
-        <div style="margin-top: 30px;"><div class="splash-loader"></div></div>
-        <p style="color: #A0C4E8; margin-top: 20px; font-size: 0.9rem;">Loading Secure System...</p>
-    </div>
-    '''
-    st.markdown(splash_html, unsafe_allow_html=True)
-    time.sleep(1.5)
-    st.session_state.splash_done = True
-    st.rerun()
-
-# ---------- APPLY CSS ----------
-st.markdown(get_css(), unsafe_allow_html=True)
-
-# ---------- TRICOLOR STRIP ----------
-st.markdown('''
-<div class="tricolor-strip">
-    <div class="tricolor-saffron"></div>
-    <div class="tricolor-white"></div>
-    <div class="tricolor-green"></div>
-</div>
-''', unsafe_allow_html=True)
-
-# ---------- LOGIN OR MAIN UI ----------
-if not st.session_state.logged_in:
-    # ---------- LOGIN SCREEN ----------
-    st.markdown(f'<h1 style="text-align: center; color: #0B2B4A; margin-top: 40px;">{t("login_title")}</h1>', unsafe_allow_html=True)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        with st.container():
-            st.markdown('<div style="background: white; padding: 2rem; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
-            username = st.text_input(t('username'))
-            password = st.text_input(t('password'), type="password")
-            if st.button(t('login_btn'), use_container_width=True):
-                if username == "admin" and password == "admin":
-                    st.session_state.logged_in = True
-                    st.rerun()
-                elif username == "asha" and password == "asha":
-                    st.session_state.logged_in = True
-                    st.rerun()
-                else:
-                    st.error(t('invalid'))
-            st.markdown('</div>', unsafe_allow_html=True)
-            st.caption("Demo: `admin/admin` or `asha/asha`")
-    st.stop()   # यहाँ stop जरूरी है ताकि login screen के बाद नीचे का code न चले
-
-# ---------- MAIN APP (only when logged in) ----------
-# ---------- SIDEBAR ----------
-with st.sidebar:
-    st.markdown(f'''
-    <div class="sidebar-content">
-        {ASHOKA_CHAKRA}
-        <div class="sidebar-ministry">{t('ministry')}</div>
-        <div class="sidebar-sub">{t('govt')}</div>
-        <div class="sidebar-tag">{t('scheme')}</div>
-        <hr style="border-color: #1E4A6F; width: 100%; margin: 15px 0;">
-        <div class="sidebar-menu">> {t('mission')}</div>
-        <div class="sidebar-menu">> e-Triage Sahayak v3.0</div>
-        <div class="sidebar-menu">> {t('asha')}</div>
-    </div>
-    ''', unsafe_allow_html=True)
-    
-    st.divider()
-    
-    # Toggle Controls
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        if st.button("🌙 Dark" if not st.session_state.dark_mode else "☀️ Light", use_container_width=True):
-            st.session_state.dark_mode = not st.session_state.dark_mode
-            st.rerun()
-    with col_t2:
-        if st.button("🇬🇧 EN" if st.session_state.lang == 'hi' else "🇮🇳 हिंदी", use_container_width=True):
-            st.session_state.lang = 'hi' if st.session_state.lang == 'en' else 'en'
-            st.rerun()
+        <h1 style="color: #FF9933; font-weight: 700;">{t('ministry'
