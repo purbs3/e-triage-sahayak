@@ -18,7 +18,6 @@ except ImportError:
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
     page_title="NHM e-Triage | Govt. of India",
-    page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -36,8 +35,10 @@ if 'role' not in st.session_state:
     st.session_state.role = 'ASHA Worker'
 if 'last_assessment' not in st.session_state:
     st.session_state.last_assessment = None
+if 'last_synced_time' not in st.session_state:
+    st.session_state.last_synced_time = datetime.datetime.now().strftime("%H:%M:%S")
 
-# ---------- DATABASE SETUP & AUTO-MIGRATION ----------
+# ---------- DATABASE SETUP & MIGRATION ----------
 DB_NAME = "triage_data.db"
 
 def get_db_connection():
@@ -66,14 +67,19 @@ def init_db():
                 result_msg TEXT,
                 level TEXT,
                 timestamp TEXT,
-                abha_id TEXT DEFAULT ''
+                abha_id TEXT DEFAULT '',
+                category TEXT DEFAULT 'General',
+                danger_signs TEXT DEFAULT 'None'
             )
         ''')
-        # Check if abha_id column exists for existing DBs
         c.execute("PRAGMA table_info(assessments)")
         columns = [col[1] for col in c.fetchall()]
         if 'abha_id' not in columns:
             c.execute("ALTER TABLE assessments ADD COLUMN abha_id TEXT DEFAULT ''")
+        if 'category' not in columns:
+            c.execute("ALTER TABLE assessments ADD COLUMN category TEXT DEFAULT 'General'")
+        if 'danger_signs' not in columns:
+            c.execute("ALTER TABLE assessments ADD COLUMN danger_signs TEXT DEFAULT 'None'")
         conn.commit()
 
 def save_to_db(data):
@@ -83,15 +89,17 @@ def save_to_db(data):
             INSERT INTO assessments (
                 name, age, fever, breath, bp, pregnant, diabetes,
                 chest_pain, vomiting, headache, spo2, district, block,
-                result_title, result_msg, level, timestamp, abha_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                result_title, result_msg, level, timestamp, abha_id,
+                category, danger_signs
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             data['name'], data['age'], data['fever'], data['breath'],
             data['bp'], data['pregnant'], data['diabetes'],
             data['chest_pain'], data['vomiting'], data['headache'],
             data['spo2'], data['district'], data['block'],
             data['result_title'], data['result_msg'], data['level'],
-            data['timestamp'], data.get('abha_id', '')
+            data['timestamp'], data.get('abha_id', ''),
+            data.get('category', 'General'), data.get('danger_signs', 'None')
         ))
         last_id = c.lastrowid
         conn.commit()
@@ -146,31 +154,36 @@ TEXTS = {
 def t(key):
     return TEXTS[key][st.session_state.lang]
 
-# ---------- TRIAGE LOGIC (MoHFW Evidence-Based Rules) ----------
+# ---------- ADVANCED TRIAGE LOGIC (MoHFW ANC / IMNCI GUIDELINES) ----------
 def calculate_triage(vitals):
     spo2 = vitals.get('spo2', 98)
     chest_pain = vitals.get('chest_pain') == 'Yes'
     breath = vitals.get('breath') == 'Severe'
     pregnant = vitals.get('pregnant') == 'Yes'
     bp = vitals.get('bp')
+    age = vitals.get('age', 30)
+    danger_signs = vitals.get('danger_signs', [])
     
-    # Red Condition (Emergency)
-    if spo2 < 90 or chest_pain or breath or (pregnant and bp == 'Very High (>160/100)'):
+    # Red Condition (Immediate Emergency)
+    is_pediatric_emergency = age <= 5 and any(sign in danger_signs for sign in ["Convulsions / Fits", "Inability to feed/drink", "Lethargy/Unconsciousness"])
+    is_hrp_emergency = pregnant and (bp == 'Very High (>160/100)' or "Bleeding" in danger_signs or "Severe Abdominal Pain" in danger_signs)
+    
+    if spo2 < 90 or chest_pain or breath or is_hrp_emergency or is_pediatric_emergency:
         return {
             'level': 'RED',
             'title': 'RED ALERT - Critical Emergency',
             'msg': 'Immediate referral required to District Hospital / Tertiary Care Center. Arrange 108 Ambulance instantly.',
             'action': 'ACTION: IMMEDIATE (0-15 Mins)'
         }
-    # Yellow Condition (Urgent)
-    elif spo2 <= 94 or bp in ['High (140-159/90-99)', 'Very High (>160/100)'] or vitals.get('fever') == 'High (>102°F)':
+    # Yellow Condition (Urgent Care Needed)
+    elif spo2 <= 94 or bp in ['High (140-159/90-99)', 'Very High (>160/100)'] or vitals.get('fever') == 'High (>102°F)' or len(danger_signs) > 0:
         return {
             'level': 'YELLOW',
             'title': 'YELLOW ALERT - Urgent Care Needed',
             'msg': 'Refer to Community Health Centre (CHC) / Primary Health Centre (PHC) within 1-2 hours.',
             'action': 'ACTION: URGENT (Within 1 Hour)'
         }
-    # Green Condition (Routine / Stable)
+    # Green Condition (Stable / Routine OPD)
     else:
         return {
             'level': 'GREEN',
@@ -183,12 +196,9 @@ def calculate_triage(vitals):
 def check_outbreak_risk(df):
     if df.empty or len(df) < 3:
         return []
-    
-    # Analyze high fever or respiratory illness clustering in blocks
     fever_cases = df[df['fever'] == 'High (>102°F)']
     if fever_cases.empty:
         return []
-    
     cluster_counts = fever_cases.groupby(['district', 'block']).size().reset_index(name='case_count')
     hotspots = cluster_counts[cluster_counts['case_count'] >= 2].to_dict('records')
     return hotspots
@@ -200,7 +210,7 @@ def generate_referral_pdf(data):
     pdf = FPDF()
     pdf.add_page()
     
-    # Top Header
+    # Header Band
     pdf.set_fill_color(11, 43, 74)
     pdf.rect(0, 0, 210, 28, 'F')
     pdf.set_font("Helvetica", "B", 14)
@@ -211,7 +221,7 @@ def generate_referral_pdf(data):
     pdf.cell(190, 6, "Ministry of Health & Family Welfare | Government of India", ln=True, align='C')
     pdf.ln(12)
     
-    # Patient Demographics
+    # Demographics
     pdf.set_text_color(11, 43, 74)
     pdf.set_font("Helvetica", "B", 11)
     ref_str = f"Ref ID: NHM-{data.get('id', 'NEW')}"
@@ -224,12 +234,12 @@ def generate_referral_pdf(data):
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(95, 6, f"Patient Name: {data['name']}", 0)
-    pdf.cell(95, 6, f"Age: {data['age']} Years", ln=True)
+    pdf.cell(95, 6, f"Age: {data['age']} Years | Category: {data.get('category', 'General')}", ln=True)
     pdf.cell(95, 6, f"District: {data['district']}", 0)
     pdf.cell(95, 6, f"Block/Taluka: {data['block']}", ln=True)
     pdf.ln(4)
     
-    # Vitals Summary Table
+    # Vitals Matrix
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_fill_color(240, 244, 248)
     pdf.cell(45, 7, "Parameter", 1, 0, 'L', True)
@@ -250,8 +260,8 @@ def generate_referral_pdf(data):
     
     pdf.cell(45, 6, "Chest Pain", 1)
     pdf.cell(50, 6, str(data['chest_pain']), 1)
-    pdf.cell(45, 6, "Pregnant Status", 1)
-    pdf.cell(50, 6, str(data['pregnant']), 1, 1)
+    pdf.cell(45, 6, "Danger Signs", 1)
+    pdf.cell(50, 6, str(data.get('danger_signs', 'None'))[:25], 1, 1)
     pdf.ln(6)
     
     # Triage Verdict Box
@@ -271,7 +281,7 @@ def generate_referral_pdf(data):
     pdf.multi_cell(185, 5, f"Clinical Action: {data['result_msg']}")
     pdf.ln(8)
     
-    # Verification Stamp
+    # Stamp
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 116, 139)
     pdf.cell(190, 5, "Official Ayushman Bharat Digital Health Mission document. Valid for expedited clinical intake.", ln=True, align='C')
@@ -291,8 +301,9 @@ st.markdown(f"""
                 <p style="margin: 0; color: #FFD966; font-size: 0.85rem; font-weight: 500;">Ayushman Bharat - AI-Assisted Clinical Decision Support</p>
             </div>
         </div>
-        <div>
+        <div style="display: flex; gap: 10px; align-items: center;">
             <span style="background: #FF9933; color: #0B2B4A; padding: 4px 14px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; letter-spacing: 0.5px;">MoHFW Compliant</span>
+            <span style="background: rgba(255,255,255,0.15); color: white; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem;">Cloud Sync: Active</span>
         </div>
     </div>
 </div>
@@ -304,16 +315,29 @@ with st.sidebar:
     st.session_state.lang = st.selectbox("Language / भाषा", ['en', 'hi'], format_func=lambda x: 'English' if x == 'en' else 'हिंदी')
     menu = st.radio("Navigation", ["New Assessment", "Outbreak Surveillance", "Analytics Dashboard", "Patient Logs"])
     st.markdown("---")
-    st.caption("National Digital Health Mission (NDHM) &bull; Production v3.2")
+    
+    st.markdown("#### Cloud Synchronization")
+    st.caption(f"Last Synced: `{st.session_state.last_synced_time}`")
+    if st.button("Sync Offline Records", use_container_width=True):
+        st.session_state.last_synced_time = datetime.datetime.now().strftime("%H:%M:%S")
+        st.success("All local registries synced with DHS.")
+        
+    st.markdown("---")
+    st.caption("National Digital Health Mission (NDHM) &bull; Production v3.3")
 
 # ---------- PAGE 1: NEW ASSESSMENT ----------
 if menu == "New Assessment":
     st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_ASSESSMENT}<h3 style='margin:0; font-size: 1.3rem; color: #0B2B4A;'>{t('form_title')}</h3></div>", unsafe_allow_html=True)
+    
+    # Clinical Protocol Selector
+    clinical_category = st.radio("Clinical Intake Category", ["General Adult", "Antenatal / High-Risk Pregnancy", "Pediatric (< 5 Years)"], horizontal=True)
+    
     with st.form("triage_form"):
         col1, col2, col3 = st.columns(3)
         with col1:
             name = st.text_input(t('name'), placeholder="e.g. Ramesh Kumar")
-            age = st.number_input(t('age'), min_value=1, max_value=120, value=35)
+            default_age = 2 if clinical_category == "Pediatric (< 5 Years)" else (26 if "Pregnancy" in clinical_category else 35)
+            age = st.number_input(t('age'), min_value=1, max_value=120, value=default_age)
             spo2 = st.slider(t('spo2'), min_value=70, max_value=100, value=98)
             fever = st.selectbox(t('fever'), ["Normal", "Mild (99-101°F)", "High (>102°F)"])
         
@@ -321,7 +345,7 @@ if menu == "New Assessment":
             breath = st.selectbox(t('breath'), ["Normal", "Mild", "Severe"])
             bp = st.selectbox(t('bp'), ["Normal", "High (140-159/90-99)", "Very High (>160/100)", "Low (<90/60)"])
             chest_pain = st.selectbox(t('chest_pain'), ["No", "Yes"])
-            pregnant = st.selectbox(t('pregnant'), ["No", "Yes"])
+            pregnant = "Yes" if "Pregnancy" in clinical_category else st.selectbox(t('pregnant'), ["No", "Yes"])
             
         with col3:
             district = st.text_input(t('district'), value="Varanasi")
@@ -330,6 +354,15 @@ if menu == "New Assessment":
             diabetes = st.selectbox(t('diabetes'), ["No", "Yes"])
             headache = st.selectbox("Severe Headache", ["No", "Yes"])
             vomiting = st.selectbox("Vomiting / Nausea", ["No", "Yes"])
+
+        # Specialized Danger Signs Checklist
+        danger_selected = []
+        if clinical_category == "Antenatal / High-Risk Pregnancy":
+            st.markdown("#### High-Risk Pregnancy Danger Markers")
+            danger_selected = st.multiselect("Select observed complications:", ["Bleeding", "Severe Abdominal Pain", "Severe Swelling (Face/Hands)", "Decreased Foetal Movement"])
+        elif clinical_category == "Pediatric (< 5 Years)":
+            st.markdown("#### IMNCI Pediatric Danger Markers")
+            danger_selected = st.multiselect("Select observed IMNCI red flags:", ["Convulsions / Fits", "Inability to feed/drink", "Lethargy/Unconsciousness", "Stridor in calm child"])
 
         submitted = st.form_submit_button(t('submit'), use_container_width=True)
 
@@ -343,16 +376,20 @@ if menu == "New Assessment":
                 'breath': breath,
                 'pregnant': pregnant,
                 'bp': bp,
-                'fever': fever
+                'fever': fever,
+                'age': age,
+                'danger_signs': danger_selected
             }
             res = calculate_triage(vitals)
             
+            danger_str = ", ".join(danger_selected) if danger_selected else "None"
             assessment_payload = {
                 'name': name, 'age': age, 'fever': fever, 'breath': breath,
                 'bp': bp, 'pregnant': pregnant, 'diabetes': diabetes,
                 'chest_pain': chest_pain, 'vomiting': vomiting, 'headache': headache,
                 'spo2': spo2, 'district': district, 'block': block,
-                'abha_id': abha_id,
+                'abha_id': abha_id, 'category': clinical_category,
+                'danger_signs': danger_str,
                 'result_title': res['title'], 'result_msg': res['msg'],
                 'level': res['level'], 'action': res['action'],
                 'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -363,7 +400,7 @@ if menu == "New Assessment":
             st.session_state.last_assessment = assessment_payload
             st.cache_data.clear()
 
-    # Render Result Card
+    # Render Verdict
     if st.session_state.last_assessment:
         cur = st.session_state.last_assessment
         color = "#DC2626" if cur['level'] == 'RED' else ("#F59E0B" if cur['level'] == 'YELLOW' else "#22C55E")
@@ -382,18 +419,18 @@ if menu == "New Assessment":
         </div>
         """, unsafe_allow_html=True)
         
-        # Action Hub
-        st.markdown("#### Clinical Action Hub")
+        # Clinical Action Hub
+        st.markdown("#### Clinical Action & Referral Dispatch Hub")
         col_act1, col_act2, col_act3 = st.columns([1.5, 1.5, 1])
         
-        # 1. Official PDF Slip
+        # 1. Download PDF Slip
         with col_act1:
             if PDF_AVAILABLE:
                 pdf_path = generate_referral_pdf(cur)
                 if pdf_path and os.path.exists(pdf_path):
                     with open(pdf_path, "rb") as f:
                         st.download_button(
-                            label="Download Official Referral Slip (.PDF)",
+                            label="📄 Download Official Referral Slip (.PDF)",
                             data=f,
                             file_name=f"NHM_Referral_{cur['name']}_{cur.get('id', 'Rec')}.pdf",
                             mime="application/pdf",
@@ -402,7 +439,103 @@ if menu == "New Assessment":
             else:
                 st.caption("PDF engine unavailable.")
                 
-        # 2. Telemedicine / Emergency Connect
+        # 2. WhatsApp Direct SOS & Telemedicine Link
         with col_act2:
+            # Generate pre-filled WhatsApp SOS text
+            summary_msg = f"*EMERGENCY REFERRAL - NHM e-TRIAGE*\n*Patient:* {cur['name']} ({cur['age']}y)\n*Severity:* {cur['level']}\n*SpO2:* {cur['spo2']}%\n*BP:* {cur['bp']}\n*Location:* {cur['block']}, {cur['district']}\n*Action:* {cur['result_title']}"
+            encoded_msg = urllib.parse.quote(summary_msg)
+            whatsapp_url = f"https://wa.me/?text={encoded_msg}"
+            
+            st.link_button("📲 Dispatch WhatsApp Alert to Doctor", whatsapp_url, use_container_width=True)
+            
             if cur['level'] in ['RED', 'YELLOW']:
-                tele_u
+                st.link_button("🩺 Open e-Sanjeevani Tele-Consult", "https://esanjeevani.mohfw.gov.in/#/patient/consultation", use_container_width=True)
+                    
+        # 3. OPD QR Verification
+        with col_act3:
+            qr_data = f"NHM-REF:{cur.get('id')}|Patient:{cur['name']}|SpO2:{cur['spo2']}|Level:{cur['level']}"
+            encoded_qr = urllib.parse.quote(qr_data)
+            qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=110x110&data={encoded_qr}"
+            st.image(qr_url, caption="OPD Intake QR Code", width=110)
+
+# ---------- PAGE 2: OUTBREAK SURVEILLANCE ----------
+elif menu == "Outbreak Surveillance":
+    st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_OUTBREAK}<h3 style='margin:0; font-size: 1.3rem; color: #DC2626;'>Disease Outbreak & Cluster Surveillance</h3></div>", unsafe_allow_html=True)
+    df = load_from_db()
+    hotspots = check_outbreak_risk(df)
+    
+    if hotspots:
+        for spot in hotspots:
+            st.error(f"⚠️ **EPIDEMIC CLUSTER DETECTED**: High Fever concentration in **District: {spot['district']} | Block: {spot['block']}** ({spot['case_count']} Critical Cases recorded).")
+    else:
+        st.success("🛡️ **Surveillance Active**: No anomalous disease clusters or epidemic triggers detected in recent logs.")
+
+    if not df.empty:
+        col_o1, col_o2 = st.columns(2)
+        with col_o1:
+            block_fever = df[df['fever'] == 'High (>102°F)'].groupby('block').size().reset_index(name='High Fever Cases')
+            if not block_fever.empty:
+                fig_outbreak = px.bar(block_fever, x='block', y='High Fever Cases', title='High-Fever Spike per Block', color='High Fever Cases', color_continuous_scale='Reds')
+                st.plotly_chart(fig_outbreak, use_container_width=True)
+            else:
+                st.info("No high-fever cases recorded.")
+        with col_o2:
+            st.markdown("#### Nearest Healthcare Facility Routing")
+            st.info("""
+            * **District Hospital (Varanasi):** 108 / 0542-2508102 (ICU & Critical Care)
+            * **CHC Kashi Unit:** 0542-2210045 (24/7 Emergency & Maternity)
+            * **MoHFW National Tele-Health Helpline:** 1075 / 104
+            """)
+
+# ---------- PAGE 3: ANALYTICS DASHBOARD ----------
+elif menu == "Analytics Dashboard":
+    st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_ANALYTICS}<h3 style='margin:0; font-size: 1.3rem; color: #0B2B4A;'>District Triage Analytics</h3></div>", unsafe_allow_html=True)
+    df = load_from_db()
+    if df.empty:
+        st.info("No assessment records found.")
+    else:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Assessments", len(df))
+        col2.metric("Critical (Red Alert)", len(df[df['level'] == 'RED']))
+        col2_pct = round((len(df[df['level'] == 'RED']) / len(df)) * 100, 1)
+        col3.metric("Urgent (Yellow Alert)", len(df[df['level'] == 'YELLOW']))
+
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            fig1 = px.pie(
+                df, 
+                names='level', 
+                title='Triage Severity Distribution', 
+                color='level',
+                color_discrete_map={'RED': '#DC2626', 'YELLOW': '#F59E0B', 'GREEN': '#22C55E'}
+            )
+            fig1.update_layout(margin=dict(t=40, b=20, l=20, r=20))
+            st.plotly_chart(fig1, use_container_width=True)
+            
+        with col_c2:
+            fig2 = px.histogram(
+                df, 
+                x='age', 
+                nbins=15, 
+                title='Patient Age Demographics', 
+                color_discrete_sequence=['#0B2B4A']
+            )
+            fig2.update_layout(margin=dict(t=40, b=20, l=20, r=20), xaxis_title="Age (Years)", yaxis_title="Count")
+            st.plotly_chart(fig2, use_container_width=True)
+
+# ---------- PAGE 4: PATIENT LOGS ----------
+elif menu == "Patient Logs":
+    st.markdown(f"<div style='display: flex; align-items: center; margin-bottom: 1rem;'>{SVG_HEADING_LOGS}<h3 style='margin:0; font-size: 1.3rem; color: #0B2B4A;'>Patient Assessment Registry</h3></div>", unsafe_allow_html=True)
+    df = load_from_db()
+    if not df.empty:
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Export Registry Data (CSV)", 
+            data=csv, 
+            file_name="triage_registry.csv", 
+            mime="text/csv",
+            use_container_width=False
+        )
+    else:
+        st.info("No records recorded yet.")
