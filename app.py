@@ -154,7 +154,7 @@ TEXTS = {
 def t(key):
     return TEXTS[key][st.session_state.lang]
 
-# ---------- TRIAGE CLINICAL LOGIC ----------
+# ---------- TRIAGE CLINICAL LOGIC WITH REASONING ----------
 def calculate_triage(vitals):
     spo2 = vitals.get('spo2', 98)
     chest_pain = vitals.get('chest_pain') == 'Yes'
@@ -164,30 +164,57 @@ def calculate_triage(vitals):
     age = vitals.get('age', 30)
     danger_signs = vitals.get('danger_signs', [])
     
-    is_pediatric_emergency = age <= 5 and any(sign in danger_signs for sign in ["Convulsions / Fits", "Inability to feed/drink", "Lethargy/Unconsciousness"])
-    is_hrp_emergency = pregnant and (bp == 'Very High (>160/100)' or "Bleeding" in danger_signs or "Severe Abdominal Pain" in danger_signs)
+    triggers = []
     
-    if spo2 < 90 or chest_pain or breath or is_hrp_emergency or is_pediatric_emergency:
+    if spo2 < 90:
+        triggers.append(f"Critical Hypoxia (SpO2: {spo2}%)")
+    if chest_pain:
+        triggers.append("Acute Chest Pain / Cardiac Risk")
+    if breath:
+        triggers.append("Severe Respiratory Distress")
+    if pregnant and bp == 'Very High (>160/100)':
+        triggers.append("Severe Gestational Hypertension (Eclampsia Risk)")
+    if pregnant and "Bleeding" in danger_signs:
+        triggers.append("Antepartum Haemorrhage")
+    if age <= 5 and any(sign in danger_signs for sign in ["Convulsions / Fits", "Inability to feed/drink", "Lethargy/Unconsciousness"]):
+        triggers.append("IMNCI General Pediatric Danger Sign Detected")
+        
+    if len(triggers) > 0:
         return {
             'level': 'RED',
             'title': 'RED ALERT - Critical Emergency',
             'msg': 'Immediate referral required to District Hospital / Tertiary Care Center. Arrange 108 Ambulance instantly.',
-            'action': 'ACTION: IMMEDIATE (0-15 Mins)'
+            'action': 'ACTION: IMMEDIATE (0-15 Mins)',
+            'triggers': triggers
         }
-    elif spo2 <= 94 or bp in ['High (140-159/90-99)', 'Very High (>160/100)'] or vitals.get('fever') == 'High (>102°F)' or len(danger_signs) > 0:
+    
+    # Urgent Conditions
+    urgent_triggers = []
+    if spo2 <= 94:
+        urgent_triggers.append(f"Borderline Hypoxia (SpO2: {spo2}%)")
+    if bp in ['High (140-159/90-99)', 'Very High (>160/100)']:
+        urgent_triggers.append(f"Elevated Blood Pressure ({bp})")
+    if vitals.get('fever') == 'High (>102°F)':
+        urgent_triggers.append("High Grade Pyrexia (>102°F)")
+    if len(danger_signs) > 0:
+        urgent_triggers.append(f"Complications Noted: {', '.join(danger_signs)}")
+        
+    if len(urgent_triggers) > 0:
         return {
             'level': 'YELLOW',
             'title': 'YELLOW ALERT - Urgent Care Needed',
             'msg': 'Refer to Community Health Centre (CHC) / Primary Health Centre (PHC) within 1-2 hours.',
-            'action': 'ACTION: URGENT (Within 1 Hour)'
+            'action': 'ACTION: URGENT (Within 1 Hour)',
+            'triggers': urgent_triggers
         }
-    else:
-        return {
-            'level': 'GREEN',
-            'title': 'GREEN ALERT - Stable Condition',
-            'msg': 'Manageable at Sub-Centre / Ayushman Arogya Mandir. Routine consultation & follow-up.',
-            'action': 'ACTION: ROUTINE (OPD Timing)'
-        }
+        
+    return {
+        'level': 'GREEN',
+        'title': 'GREEN ALERT - Stable Condition',
+        'msg': 'Manageable at Sub-Centre / Ayushman Arogya Mandir. Routine consultation & follow-up.',
+        'action': 'ACTION: ROUTINE (OPD Timing)',
+        'triggers': ['All baseline clinical vitals within stable physiological ranges.']
+    }
 
 # ---------- OUTBREAK ENGINE ----------
 def check_outbreak_risk(df):
@@ -313,7 +340,7 @@ with st.sidebar:
         st.success("All local registries synced with DHS.")
         
     st.markdown("---")
-    st.caption("National Digital Health Mission (NDHM) &bull; Production v3.4")
+    st.caption("National Digital Health Mission (NDHM) &bull; Production v3.5")
 
 # ---------- PAGE 1: NEW ASSESSMENT ----------
 if menu == "New Assessment":
@@ -368,20 +395,4 @@ if menu == "New Assessment":
                 'age': age,
                 'danger_signs': danger_selected
             }
-            res = calculate_triage(vitals)
-            
-            danger_str = ", ".join(danger_selected) if danger_selected else "None"
-            assessment_payload = {
-                'name': name, 'age': age, 'fever': fever, 'breath': breath,
-                'bp': bp, 'pregnant': pregnant, 'diabetes': diabetes,
-                'chest_pain': chest_pain, 'vomiting': vomiting, 'headache': headache,
-                'spo2': spo2, 'district': district, 'block': block,
-                'abha_id': abha_id, 'category': clinical_category,
-                'danger_signs': danger_str,
-                'result_title': res['title'], 'result_msg': res['msg'],
-                'level': res['level'], 'action': res['action'],
-                'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            row_id = save_to_db(assessment_payload)
-            assessment_payl
+            res = calculate_triage(vita
