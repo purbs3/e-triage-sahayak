@@ -342,9 +342,9 @@ def icon_alert_green(): return '<svg width="48" height="48" viewBox="0 0 24 24" 
 # ---------- INIT DATABASE ----------
 init_db()
 
-# ---------- SPLASH SCREEN ----------
+# ---------- SPLASH SCREEN (No f-string issues) ----------
 if not st.session_state.splash_done:
-    splash_html = f'''
+    splash_html = """
     <div class="splash-container">
         <div class="splash-logo">⚕️</div>
-        <h1 style="color: #FF9933; font-weight: 700;">{t('ministry'
+        <h1 style="color: #FF9933; font-weight:
