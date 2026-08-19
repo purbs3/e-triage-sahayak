@@ -395,4 +395,4 @@ if menu == "New Assessment":
                 'age': age,
                 'danger_signs': danger_selected
             }
-            res = calculate_triage(vita
+            res = calculate_triage(vitals)
