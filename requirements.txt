@@ -1,4 +1,6 @@
 streamlit
-fpdf
 pandas
 plotly
+fpdf2
+folium
+streamlit-folium
